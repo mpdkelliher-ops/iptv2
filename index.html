@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>IPTV</title>
+<style type="text/css">
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #000000;
+    color: #ffffff;
+    font-family: Arial, sans-serif;
+    font-size: 18px;
+  }
+  #setup {
+    padding: 20px;
+  }
+  #setup input {
+    display: block;
+    width: 300px;
+    padding: 8px;
+    margin-bottom: 10px;
+    font-size: 18px;
+  }
+  #setup button {
+    padding: 10px 20px;
+    font-size: 18px;
+  }
+  #status {
+    padding: 10px 20px;
+    color: #cccccc;
+  }
+  #videoWrap {
+    width: 100%;
+  }
+  video {
+    width: 100%;
+    height: 360px;
+    background-color: #000000;
+  }
+  #channelList {
+    padding: 10px;
+  }
+  .catHeader {
+    background-color: #222222;
+    padding: 8px;
+    margin-top: 10px;
+    font-weight: bold;
+    color: #aaaaaa;
+  }
+  .chan {
+    padding: 10px;
+    border-bottom: 1px solid #333333;
+    cursor: pointer;
+  }
+  .chan a {
+    color: #ffffff;
+    text-decoration: none;
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+<div id="setup">
+  <div>Server URL (e.g. http://3vilcorp.uk:8080):</div>
+  <input type="text" id="hostUrl" />
+  <div>Username:</div>
+  <input type="text" id="username" />
+  <div>Password:</div>
+  <input type="text" id="password" />
+  <button onclick="loadChannels()">Load Channels</button>
+</div>
+
+<div id="status">Enter details above and press Load Channels.</div>
+
+<div id="videoWrap">
+  <video id="player" controls="controls"></video>
+</div>
+
+<div id="channelList"></div>
+
+<script type="text/javascript">
+
+function setStatus(msg) {
+  document.getElementById('status').innerHTML = msg;
+}
+
+function getValue(id) {
+  return document.getElementById(id).value;
+}
+
+function saveCookie(name, value) {
+  document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; max-age=31536000";
+}
+
+function readCookie(name) {
+  var pairs = document.cookie.split(";");
+  for (var i = 0; i < pairs.length; i++) {
+    var pair = pairs[i].replace(/^\s+/, "").split("=");
+    if (pair[0] === name) {
+      return decodeURIComponent(pair[1]);
+    }
+  }
+  return "";
+}
+
+function loadChannels() {
+  var host = getValue('hostUrl');
+  var user = getValue('username');
+  var pass = getValue('password');
+
+  if (host === "" || user === "" || pass === "") {
+    setStatus("Please fill in all fields.");
+    return;
+  }
+
+  saveCookie('iptv_host', host);
+  saveCookie('iptv_user', user);
+  saveCookie('iptv_pass', pass);
+
+  setStatus("Loading channels, please wait...");
+
+  var xhr = new XMLHttpRequest();
+  var url = "/.netlify/functions/channels?host=" + encodeURIComponent(host) +
+            "&user=" + encodeURIComponent(user) +
+            "&pass=" + encodeURIComponent(pass);
+
+  xhr.open("GET", url, true);
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          if (data.error) {
+            setStatus("Error: " + data.error);
+            return;
+          }
+          renderChannels(data.channels);
+          setStatus("Loaded " + data.channels.length + " channels.");
+        } catch (e) {
+          setStatus("Error parsing response: " + e.message);
+        }
+      } else {
+        setStatus("Request failed with status " + xhr.status);
+      }
+    }
+  };
+  xhr.send();
+}
+
+function renderChannels(channels) {
+  var listEl = document.getElementById('channelList');
+  listEl.innerHTML = "";
+
+  var grouped = {};
+  var catOrder = [];
+
+  for (var i = 0; i < channels.length; i++) {
+    var ch = channels[i];
+    if (!grouped[ch.category]) {
+      grouped[ch.category] = [];
+      catOrder.push(ch.category);
+    }
+    grouped[ch.category].push(ch);
+  }
+
+  catOrder.sort();
+
+  var html = "";
+  for (var c = 0; c < catOrder.length; c++) {
+    var catName = catOrder[c];
+    html += '<div class="catHeader">' + catName + '</div>';
+    var list = grouped[catName];
+    for (var j = 0; j < list.length; j++) {
+      var item = list[j];
+      html += '<div class="chan"><a href="javascript:void(0);" onclick="playChannel(\'' +
+              escapeJs(item.m3u8) + '\',\'' + escapeJs(item.ts) + '\')">' +
+              escapeHtml(item.name) + '</a></div>';
+    }
+  }
+
+  listEl.innerHTML = html;
+}
+
+function escapeHtml(text) {
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(text));
+  return div.innerHTML;
+}
+
+function escapeJs(text) {
+  return String(text).replace(/'/g, "\\'");
+}
+
+function playChannel(m3u8Url, tsUrl) {
+  var video = document.getElementById('player');
+  setStatus("Loading stream...");
+
+  // Try m3u8 first (native HLS via OS media layer on some old WebKit builds)
+  video.src = m3u8Url;
+
+  video.onerror = function () {
+    // Fall back to direct .ts
+    setStatus("HLS failed, trying direct stream...");
+    video.src = tsUrl;
+    video.onerror = function () {
+      setStatus("Playback failed for this channel.");
+    };
+    video.load();
+    video.play();
+  };
+
+  video.load();
+  video.play();
+  setStatus("Playing.");
+}
+
+// Restore saved values
+window.onload = function () {
+  var host = readCookie('iptv_host');
+  var user = readCookie('iptv_user');
+  var pass = readCookie('iptv_pass');
+  if (host !== "") document.getElementById('hostUrl').value = host;
+  if (user !== "") document.getElementById('username').value = user;
+  if (pass !== "") document.getElementById('password').value = pass;
+};
+
+</script>
+
+</body>
+</html>
